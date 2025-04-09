@@ -58,12 +58,13 @@
 };
 
 &codec {
-	status = "okay";
-};
-
-&uart1 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&uart1_pins_a>;
+	allwinner,audio-routing =
+			"Headphone", "HP",
+			"Headphone", "HPCOM",
+			"LINEIN", "Line In",
+			"FMINL", "Left FM In",
+			"FMINR", "Right FM In",
+			"MIC", "Mic";
 	status = "okay";
 };
 
