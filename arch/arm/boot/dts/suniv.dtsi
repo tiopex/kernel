@@ -1,5 +1,6 @@
 #include <dt-bindings/clock/suniv-ccu-f1c100s.h>
 #include <dt-bindings/reset/suniv-ccu-f1c100s.h>
+#include <dt-bindings/dma/sun4i-a10.h>
 
 / {
 	#address-cells = <1>;
@@ -96,11 +97,14 @@
 			status = "disabled";
 		};
 
-    dma: dma-controller@01c02000 {
-      compatible = "allwinner,suniv-dma";
-      reg = <0x01c02000 0x1000>;
-      #dma-cells = <1>;
-    }; 
+		dma: dma-controller@1c02000 {
+			compatible = "allwinner,suniv-f1c100s-dma", "allwinner,suniv-dma";
+			reg = <0x01c02000 0x1000>;
+			interrupts = <18>;
+			clocks = <&ccu CLK_BUS_DMA>;
+			resets = <&ccu RST_BUS_DMA>;
+			#dma-cells = <2>;
+		};
 
 		mmc0: mmc@1c0f000 {
 			compatible = "allwinner,suniv-f1c100s-mmc", "allwinner,sun7i-a20-mmc";
@@ -154,7 +158,7 @@
 			status = "disabled";
 		};
 
-    pio: pinctrl@1c20800 {
+		pio: pinctrl@1c20800 {
 			compatible = "allwinner,suniv-f1c100s-pinctrl";
 			reg = <0x01c20800 0x400>;
 			interrupts = <38>, <39>, <40>;
@@ -164,12 +168,12 @@
 			interrupt-controller;
 			#interrupt-cells = <3>;
 			#gpio-cells = <3>;
-			
-      pwm1_pins_a: pwm1 {
+
+			pwm1_pins_a: pwm1 {
 				pins = "PE6";
 				function = "pwm1";
 			};
-      
+
 			spi0_pins_a: spi0-pins-pc {
 				pins = "PC0", "PC1", "PC2", "PC3";
 				function = "spi0";
@@ -197,20 +201,28 @@
 			interrupts = <13>;
 			clocks = <&osc24M>;
 		};
-    
-		codec: codec@1c22000 {
+
+		codec: codec@1c23c00 {
+			#sound-dai-cells = <0>;
 			compatible = "allwinner,suniv-f1c100s-codec";
-			clocks = <&ccu CLK_BUS_CODEC>, <&ccu CLK_CODEC>;
-			interrupts = <18>;
+			reg = <0x01c23c00 0x400>;
+			interrupts = <21>;
+			clocks = <&ccu CLK_BUS_CODEC>,
+					 <&ccu CLK_CODEC>;
+			clock-names = "apb", "codec";
+			resets = <&ccu RST_BUS_CODEC>;
+			dmas = <&dma SUN4I_DMA_NORMAL 0x0c>,
+				   <&dma SUN4I_DMA_NORMAL 0x0c>;
+			dma-names = "rx", "tx";
 			status = "disabled";
 		};
-		
-    battery: battery@1c23400 {
+
+		battery: battery@1c23400 {
 			compatible = "allwinner,suniv-f1c100s-battery";
 			reg = <0x01c23400 0x400>;
 		};
 
-    wdt: watchdog@1c20ca0 {
+		wdt: watchdog@1c20ca0 {
 			compatible = "allwinner,sun6i-a31-wdt";
 			reg = <0x01c20ca0 0x20>;
 		};

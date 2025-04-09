@@ -235,8 +235,8 @@ static void scan_handler(struct timer_list *timer)
   static uint32_t pre=0;
   uint32_t scan=0, val=0, debounce=0;
   static uint32_t touchRead=0, touchReadPrev=0;
-  extern void MIYOO_INCREASE_VOLUME(void);
-  extern void MIYOO_DECREASE_VOLUME(void);
+  //extern void MIYOO_INCREASE_VOLUME(void);
+  //extern void MIYOO_DECREASE_VOLUME(void);
   static char * kill_argv[] = {KILL_HK, NULL};
   static char * kill_soft_argv[] = {KILL_SOFT_HK, NULL};
   static char * shutdown_argv[] = {SHUTDOWN_HK, NULL};
@@ -786,7 +786,7 @@ static void scan_handler(struct timer_list *timer)
 		}
 		else if((val & MY_R) && (val & MY_UP)){
       if(!hotkey_down && !hotkey_custom) {
-        MIYOO_INCREASE_VOLUME();
+        //MIYOO_INCREASE_VOLUME();
         hotkey_down = true;
       }
 			hotkey_actioned = true;
@@ -795,7 +795,7 @@ static void scan_handler(struct timer_list *timer)
 		}
 		else if((val & MY_R) && (val & MY_DOWN)){
       if(!hotkey_down && !hotkey_custom) {
-        MIYOO_DECREASE_VOLUME();
+        //MIYOO_DECREASE_VOLUME();
         hotkey_down = true;
       }
 			hotkey_actioned = true;
