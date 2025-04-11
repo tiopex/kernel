@@ -1334,7 +1334,7 @@ static int sun4i_dma_probe(struct platform_device *pdev)
 	writel(0xFFFFFFFF, priv->base + SUN4I_DMA_IRQ_PENDING_STATUS_REG);
 
 	ret = devm_request_irq(&pdev->dev, priv->irq, sun4i_dma_interrupt,
-			       0, dev_name(&pdev->dev), priv);
+						   IRQF_SHARED, dev_name(&pdev->dev), priv);
 	if (ret) {
 		dev_err(&pdev->dev, "Cannot request IRQ\n");
 		goto err_clk_disable;

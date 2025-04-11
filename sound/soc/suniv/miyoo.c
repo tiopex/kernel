@@ -31,6 +31,7 @@
 #include <linux/reset.h>
 #include <linux/gpio/consumer.h>
 #include <linux/gpio.h>
+#include <linux/interrupt.h>
 
 #include <asm/io.h>
 #include <asm/gpio.h>
@@ -42,18 +43,22 @@
 #include <asm/arch-suniv/common.h>
 
 #define USE_EARPHONE          1		// set to 0 if UART pin becomes inaccessible
+#define DMA_IRQ_NUM     	  19
 
 static int miyoo_snd = 1;
+int ret;
 module_param(miyoo_snd, int, 0444);
 MODULE_PARM_DESC(miyoo_snd, "Handheld type");
 
 struct suniv_iomm {
 	uint8_t *gpio;
+	uint8_t *dma;
 };
 static struct suniv_iomm iomm={0};
 
 static void suniv_ioremap(void)
 {
+	iomm.dma = (uint8_t*)ioremap(SUNIV_DMA_BASE, 4096);
 	iomm.gpio = (uint8_t*)ioremap(SUNIV_GPIO_BASE, 4096);
 }
 
@@ -89,9 +94,26 @@ static void suniv_gpio_init(void)
 
 }
 
+static irqreturn_t dma_handler(int irq, void *dev_id)
+{
+	ret = readl(iomm.gpio + PA_DATA);
+	if(ret & 4){
+		suniv_setbits(iomm.gpio + PA_DATA, (1 << 0));
+	}
+	else{
+		suniv_clrbits(iomm.gpio + PA_DATA, (1 << 0));
+	}
+	return IRQ_NONE;
+}
+
 static int __init enable_speaker_init(void) {
 	suniv_ioremap();
 	suniv_gpio_init();
+	ret = request_irq(DMA_IRQ_NUM, dma_handler, IRQF_SHARED, "miyoo-jack", (void *)dma_handler);
+	if (ret) {
+		pr_err("Failed to get DMA IRQ\n");
+		return ret;
+	}
 	return 0;
 }
 
@@ -100,9 +122,6 @@ static void __exit enable_speaker_exit(void) {
 
 module_init(enable_speaker_init);
 module_exit(enable_speaker_exit);
-
-
-
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("tiopxyz@gmail.com");
