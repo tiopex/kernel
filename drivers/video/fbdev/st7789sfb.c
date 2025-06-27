@@ -64,7 +64,9 @@
 #include <asm/arch-suniv/codec.h>
 #include <asm/arch-suniv/clock.h>
 #include <asm/arch-suniv/common.h>
+#include <linux/ktime.h>
 
+#define TIMEOUT_NS 100000000  // 1 ms
 //#define DEBUG
 #define PALETTE_SIZE 256
 #define DRIVER_NAME  "ST7789S-fb"
@@ -90,6 +92,7 @@ module_param(invert,bool,0660);
 
 struct myfb_app{
     uint32_t yoffset;
+    int pending_yoffset;
     uint32_t vsync_count;
 };
 
@@ -133,9 +136,10 @@ static struct myfb_par *mypar=NULL;
 static struct fb_var_screeninfo myfb_var={0};
 static uint16_t lastScanLine = 120;
 static uint16_t  firstScanLine = 5;
-uint16_t x, i, scanline, vsync;
+uint16_t x, i, scanline, vsync, vsynchi;
 uint32_t mycpu_clock;
 uint32_t video_clock;
+static atomic_t vsync_flag = ATOMIC_INIT(0);
 
 static struct fb_fix_screeninfo myfb_fix = {
         .id = DRIVER_NAME,
@@ -150,8 +154,10 @@ static struct fb_fix_screeninfo myfb_fix = {
 
 static int wait_for_vsync(struct myfb_par *par)
 {
-    uint32_t count = par->app_virt->vsync_count;
-    long t = wait_event_interruptible_timeout(wait_vsync_queue, count != par->app_virt->vsync_count, HZ / 10);
+    //uint32_t count = par->app_virt->vsync_count;
+    atomic_set(&vsync_flag, 0);
+    long t = wait_event_interruptible_timeout(wait_vsync_queue,
+				     atomic_read(&vsync_flag), HZ / 10);
     return t > 0 ? 0 : (t < 0 ? (int)t : -ETIMEDOUT);
 }
 
@@ -249,30 +255,71 @@ static uint32_t lcdc_rd_dat(void)
 	return extend_24b_to_16b(readl(iomm.lcdc + TCON0_CPU_RD_REG));
 }
 
+uint16_t st7789_get_scanline(void) {
+	uint8_t buf[2] = {0};
+	lcdc_wr_cmd(0x45);
+	lcdc_rd_dat();
+	buf[0] = lcdc_rd_dat();
+	buf[1] = lcdc_rd_dat();
+
+	return  ((uint16_t)buf[0] << 8) | buf[1];
+}
+
+int wait_for_scanline_not_equal_1(void)
+{
+	ktime_t start = ktime_get();
+	while (st7789_get_scanline() == 0) {
+		if (ktime_to_ns(ktime_sub(ktime_get(), start)) > TIMEOUT_NS)
+			return -ETIMEDOUT;
+		cpu_relax();
+	}
+	return 0;
+}
+
+int wait_for_scanline_not_equal_0(void)
+{
+	ktime_t start = ktime_get();
+	while (st7789_get_scanline() == 1) {
+		if (ktime_to_ns(ktime_sub(ktime_get(), start)) > TIMEOUT_NS)
+			return -ETIMEDOUT;
+		cpu_relax();
+	}
+	return 0;
+}
+
+static void sync(struct myfb_par *par)
+{
+	//par->app_virt->vsync_count += 1;
+	atomic_set(&vsync_flag, 1);
+	wake_up_interruptible_all(&wait_vsync_queue);
+}
+
 static void refresh_lcd(struct myfb_par *par)
 {
     if (par->lcdc_ready) {
+	    par->app_virt->yoffset = par->app_virt->pending_yoffset;
         lcdc_wr_cmd(0x2c);
-  
-		if(par->app_virt->yoffset == 0) {
+	int y = par->app_virt->yoffset;
+
+		if(y == 0) {
             suniv_setbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 8));
             suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 9));
             suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 10));
             suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 11));
         }
-        else if(par->app_virt->yoffset == 240) {
+        else if(y == 240) {
             suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 8));
             suniv_setbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 9));
             suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 10));
             suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 11));
         }
-        else if(par->app_virt->yoffset == 480) {
+        else if(y == 480) {
             suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 8));
             suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 9));
             suniv_setbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 10));
             suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 11));
         }
-        else if(par->app_virt->yoffset == 720) {
+        else if(y == 720) {
             suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 8));
             suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 9));
             suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 10));
@@ -282,55 +329,14 @@ static void refresh_lcd(struct myfb_par *par)
     }
 }
 
-static irqreturn_t gpio_irq_handler(int irq, void *arg)
-{
-    refresh_lcd(arg);
-    return IRQ_HANDLED;
-}
 
 static irqreturn_t lcdc_irq_handler(int irq, void *arg)
 {
-	if (tefix != 0) {
-      suniv_clrbits(iomm.lcdc + TCON0_CPU_IF_REG, (1 << 28));
-          lcdc_wr_cmd(0x45);
-          lcdc_rd_dat();
-          lcdc_rd_dat();
-          mycpu_clock = readl(iomm.ccm + PLL_CPU_CTRL_REG);
-	        switch (mycpu_clock) {
-		    case 0x90001110: case 0x90001210: case 0x90000C20: case 0x90001310: case 0x90001410: //==[864, 912, 936, 960, 1008]MHz
-				lastScanLine = 280;
-				break;
-		    case 0x90000A20: case 0x90001010: //==[792, 816]MHz
-				lastScanLine = 240;
-				break;					
-		    case 0x90001E00: case 0x90001F00: //==[744, 768]MHz
-				lastScanLine = 200;
-				break;
-		    case 0x90001C00: case 0x90001D00: //==[696, 720]MHz
-				lastScanLine = 164;
-				break;
-		    default: // < 696Mhz
-				lastScanLine = 120;
-	      }
-          for (i = firstScanLine; i <= lastScanLine; i++) {
-              lcdc_wr_cmd(0x45);
-              lcdc_rd_dat();
-              lcdc_rd_dat();
-              vsync = lcdc_rd_dat();
-              if (vsync > 0) {
-                  refresh_lcd(arg);
-                  suniv_setbits(iomm.lcdc + TCON0_CPU_IF_REG, (1 << 28));
-                  suniv_clrbits(iomm.lcdc + TCON_INT_REG0, (1 << 15));
-                  return IRQ_HANDLED;
-              }
-          }
-    suniv_setbits(iomm.lcdc + TCON0_CPU_IF_REG, (1 << 28));
+    //refresh_lcd(arg);
     suniv_clrbits(iomm.lcdc + TCON_INT_REG0, (1 << 15));
+    atomic_set(&vsync_flag, 1);
+    wake_up_interruptible_all(&wait_vsync_queue);
     return IRQ_HANDLED;
-	}
-    refresh_lcd(arg);
-    suniv_clrbits(iomm.lcdc + TCON_INT_REG0, (1 << 15));
-    return IRQ_HANDLED;	
 }
 
 static void init_lcd(void)
@@ -343,7 +349,7 @@ static void init_lcd(void)
 
     lcdc_wr_cmd(0x11);
     mdelay(250);
-                  
+
     lcdc_wr_cmd(0x36);
     if (flip) {
         lcdc_wr_dat(0x70); //screen direction //0x70 for 3.5, 0xB0 for pg
@@ -352,7 +358,7 @@ static void init_lcd(void)
     }
 //    lcdc_wr_cmd(0x3a);
 //    lcdc_wr_dat(0x05);
-      
+
     lcdc_wr_cmd(0x2a);
     lcdc_wr_dat(0x00);
     lcdc_wr_dat(0x00);
@@ -364,7 +370,7 @@ static void init_lcd(void)
     lcdc_wr_dat(0x00);
     lcdc_wr_dat(0x00);
     lcdc_wr_dat(0xef);
-        
+
     // ST7789S Frame rate setting
 	lcdc_wr_cmd(0xb2);
 	if (tefix == 3) {
@@ -377,10 +383,10 @@ static void init_lcd(void)
 		lcdc_wr_dat(90); // bp 0x0a
 		lcdc_wr_dat(20); // fp 0x0b
 	} else {
-        lcdc_wr_dat(9); // bp 0x0a
-        lcdc_wr_dat(10); // fp 0x0b
+        lcdc_wr_dat(100); // bp 0x0a
+        lcdc_wr_dat(127); // fp 0x0b
     }
-		lcdc_wr_dat(0x00);        			
+		lcdc_wr_dat(0x00);
 		lcdc_wr_dat(0x33);
 		lcdc_wr_dat(0x33);
 
@@ -491,18 +497,20 @@ static void suniv_fb_addr_init(struct myfb_par *par)
     writel((uint32_t)(par->vram_phys + 320*240*2*0) >> 29, iomm.debe + DEBE_LAY0_FB_HI_ADDR_REG);
     writel((uint32_t)(par->vram_phys + 320*240*2*1) >> 29, iomm.debe + DEBE_LAY1_FB_HI_ADDR_REG);
     writel((uint32_t)(par->vram_phys + 320*240*2*2) >> 29, iomm.debe + DEBE_LAY2_FB_HI_ADDR_REG);
-    writel((uint32_t)(par->vram_phys + 320*240*2*3) >> 29, iomm.debe + DEBE_LAY3_FB_HI_ADDR_REG);	
+    writel((uint32_t)(par->vram_phys + 320*240*2*3) >> 29, iomm.debe + DEBE_LAY3_FB_HI_ADDR_REG);
 }
 
 static void suniv_lcdc_init(unsigned long xres, unsigned long yres)
 {
     uint32_t ret=0, bp=0, total=0;
-    uint32_t h_front_porch = 8;
-    uint32_t h_back_porch = 8;
-    uint32_t h_sync_len = 1;
-    uint32_t v_front_porch = 8;
+    uint32_t h_sync_len = 2;
+    uint32_t h_back_porch = 8; //43
+    uint32_t h_front_porch = 8; //30 Average wait time: 16.27 ms
+
+    uint32_t v_sync_len = 2;
     uint32_t v_back_porch = 8;
-    uint32_t v_sync_len = 1;
+    uint32_t v_front_porch = 8;
+
     if (tefix == 3) {
         v_front_porch = 10;
         v_back_porch = 110;
@@ -550,7 +558,7 @@ static void suniv_lcdc_init(unsigned long xres, unsigned long yres)
     ret = (v_front_porch + v_back_porch + v_sync_len);
 
     writel((1 << 31) | ((ret & 0x1f) << 4) | (1 << 24), iomm.lcdc + TCON0_CTRL_REG);
-    writel((0xf << 28) | (6 << 0), iomm.lcdc + TCON_CLK_CTRL_REG); //6, 15, 25
+    writel((0xf << 28) | (9 << 0), iomm.lcdc + TCON_CLK_CTRL_REG); //6, 15, 25
     writel((4 << 29) | (1 << 26), iomm.lcdc + TCON0_CPU_IF_REG);
     writel((1 << 28), iomm.lcdc + TCON0_IO_CTRL_REG0);
 
@@ -577,17 +585,6 @@ static void suniv_lcdc_init(unsigned long xres, unsigned long yres)
 static void suniv_enable_irq(struct myfb_par *par)
 {
     int ret=0;
-
-    par->gpio_irq = gpio_to_irq(((32 * 4) + 10));
-    if (par->gpio_irq < 0) {
-        printk("%s, failed to get irq number for gpio irq\n", __func__);
-    } else {
-        ret = request_irq(par->gpio_irq, gpio_irq_handler, IRQF_TRIGGER_RISING, "gpio_irq", par);
-        if (ret) {
-            printk("%s, failed to register gpio interrupt(%d)\n", __func__, par->gpio_irq);
-        }
-    }
-
         par->lcdc_irq = platform_get_irq(par->pdev, 0);
         if (par->lcdc_irq < 0) {
             printk("%s, failed to get irq number for lcdc irq\n", __func__);
@@ -606,7 +603,14 @@ static void suniv_cpu_init(struct myfb_par *par)
     if (tefix == 3 || tefix == 2) {
         writel(0x91001303, iomm.ccm + PLL_VIDEO_CTRL_REG);
     } else {
-        writel(0x91001107, iomm.ccm + PLL_VIDEO_CTRL_REG);
+	    writel(
+		    (1 << 31) |
+			    (1 << 28) |
+			    (1 << 24) |
+			    (16 << 8) |
+			    (7 << 0),
+		    iomm.ccm + PLL_VIDEO_CTRL_REG
+	    );
     }
     while ((readl(iomm.ccm + PLL_VIDEO_CTRL_REG) & (1 << 28)) == 0){}
     while ((readl(iomm.ccm + PLL_PERIPH_CTRL_REG) & (1 << 28)) == 0){}
@@ -617,7 +621,7 @@ static void suniv_cpu_init(struct myfb_par *par)
 
     suniv_setbits(iomm.ccm + FE_CLK_REG, (1 << 31));
     suniv_setbits(iomm.ccm + BE_CLK_REG, (1 << 31));
-    suniv_setbits(iomm.ccm + TCON_CLK_REG, (1 << 31));
+    suniv_setbits(iomm.ccm + TCON_CLK_REG, (1 << 31) | (1 << 25));
     suniv_setbits(iomm.ccm + BUS_CLK_GATING_REG1, (1 << 14) | (1 << 12) | (1 << 4));
     suniv_setbits(iomm.ccm + BUS_SOFT_RST_REG1, (1 << 14) | (1 << 12) | (1 << 4));
     for (i=0x0800; i<0x1000; i+=4) {
@@ -700,7 +704,7 @@ static int myfb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
     switch (cmd) {
         case FBIO_WAITFORVSYNC:
             wait_for_vsync(par);
-            break;			
+            break;
     }
     return 0;
 }
@@ -720,13 +724,28 @@ static int myfb_mmap(struct fb_info *info, struct vm_area_struct *vma)
     return 0;
 }
 
+
 static int myfb_pan_display(struct fb_var_screeninfo *var, struct fb_info *info)
 {
     struct myfb_par *par = info->par;
 
     info->var.xoffset = var->xoffset;
     info->var.yoffset = var->yoffset;
-    par->app_virt->yoffset = var->yoffset;
+    par->app_virt->pending_yoffset  = var->yoffset;
+//    wait_for_vsync(par);
+    suniv_clrbits(iomm.lcdc + TCON0_CPU_IF_REG, (1 << 28));
+    if (wait_for_scanline_not_equal_1() < 0)
+	    pr_warn("Timeout waiting for scanline\n");
+	    //while (st7789_get_scanline() == 1)
+    if (wait_for_scanline_not_equal_0() < 0)
+	    pr_warn("Timeout waiting for scanline\n");
+	    suniv_setbits(iomm.lcdc + TCON0_CPU_IF_REG, (1 << 28));
+
+    // Daj TCONowi trochê czasu wejæ w blanking
+    // dobierz precyzyjnie: 100300 µs
+
+
+    refresh_lcd(par);
     return 0;
 }
 
@@ -922,6 +941,8 @@ static long myioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     int32_t w, bpp;
 
     switch (cmd) {
+    case FBIO_WAITFORVSYNC:
+	    break;
         case MIYOO_FB0_PUT_OSD:
             break;
         case MIYOO_FB0_SET_MODE:
