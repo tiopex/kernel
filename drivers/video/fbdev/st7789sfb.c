@@ -383,7 +383,7 @@ static void init_lcd(void)
 		lcdc_wr_dat(90); // bp 0x0a
 		lcdc_wr_dat(20); // fp 0x0b
 	} else {
-        lcdc_wr_dat(100); // bp 0x0a
+        lcdc_wr_dat(127); // bp 0x0a
         lcdc_wr_dat(127); // fp 0x0b
     }
 		lcdc_wr_dat(0x00);
@@ -430,7 +430,7 @@ static void init_lcd(void)
     else if (tefix == 1)
         lcdc_wr_dat(0x03);
     else
-        lcdc_wr_dat(0x03); // 0x04, 0x1f
+        lcdc_wr_dat(0x02); // 0x04, 0x1f
 //
 //    lcdc_wr_cmd(0xd0);
 //    lcdc_wr_dat(0xa4);
@@ -734,10 +734,10 @@ static int myfb_pan_display(struct fb_var_screeninfo *var, struct fb_info *info)
     par->app_virt->pending_yoffset  = var->yoffset;
 //    wait_for_vsync(par);
     suniv_clrbits(iomm.lcdc + TCON0_CPU_IF_REG, (1 << 28));
-    if (wait_for_scanline_not_equal_1() < 0)
+    if (wait_for_scanline_not_equal_0() < 0)
 	    pr_warn("Timeout waiting for scanline\n");
 	    //while (st7789_get_scanline() == 1)
-    if (wait_for_scanline_not_equal_0() < 0)
+    if (wait_for_scanline_not_equal_1() < 0)
 	    pr_warn("Timeout waiting for scanline\n");
 	    suniv_setbits(iomm.lcdc + TCON0_CPU_IF_REG, (1 << 28));
 
