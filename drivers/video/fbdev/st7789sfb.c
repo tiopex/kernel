@@ -332,7 +332,7 @@ static void refresh_lcd(struct myfb_par *par)
 
 static irqreturn_t lcdc_irq_handler(int irq, void *arg)
 {
-    //refresh_lcd(arg);
+    refresh_lcd(arg);
     suniv_clrbits(iomm.lcdc + TCON_INT_REG0, (1 << 15));
     atomic_set(&vsync_flag, 1);
     wake_up_interruptible_all(&wait_vsync_queue);
@@ -745,7 +745,7 @@ static int myfb_pan_display(struct fb_var_screeninfo *var, struct fb_info *info)
     // dobierz precyzyjnie: 100300 µs
 
 
-    refresh_lcd(par);
+    //refresh_lcd(par);
     return 0;
 }
 
